@@ -1,0 +1,2196 @@
+--// ========================================================================
+--// ANDZ PREMIUM V3.0 - PART 1/2 (CORE ENGINE, KEY SYSTEM, ISLAND, TABS 1-6)
+--// Pure Roblox Instance UI | Real API Auth | Zero External UI Frameworks
+--// ========================================================================
+
+local ANDZ_V3 = {
+    Brand = "ANDZ PREMIUM",
+    Version = "v3.0.0",
+    LatestVersion = "v3.0.0",
+    Developer = "ANDZ Dev Team",
+    ApiUrl = "https://andzvclra.andanok81.workers.dev/api.php",
+    GetKeyUrl = "https://andzvclra.andanok81.workers.dev/",
+    CommunityUrl = "https://discord.gg/andzpremium",
+    ConfigVersion = 3
+}
+
+--// Services
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
+local SoundService = game:GetService("SoundService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+--// Registry quản lý tài nguyên để Cleanup sạch sẽ
+local Registry = {
+    Connections = {},
+    Instances = {},
+    Visuals = {},
+    ActiveThreads = {}
+}
+
+local function TrackConn(conn)
+    if conn then
+        table.insert(Registry.Connections, conn)
+    end
+    return conn
+end
+
+local function TrackInst(inst)
+    if inst then
+        table.insert(Registry.Instances, inst)
+    end
+    return inst
+end
+
+local function CreateInst(className, props, parent)
+    local obj = Instance.new(className)
+    if props then
+        for k, v in pairs(props) do
+            if k ~= "Parent" then
+                pcall(function() obj[k] = v end)
+            end
+        end
+    end
+    if parent then
+        obj.Parent = parent
+    end
+    return TrackInst(obj)
+end
+
+--// Trạng thái chung toàn hệ thống (Single Source of Truth)
+local State = {
+    Authenticated = false,
+    LicenseKey = "",
+    LicenseStatus = "WAITING FOR VERIFICATION",
+    LicenseExpiry = "--",
+    ApiLastStatus = "Chưa kiểm tra",
+    SessionStart = os.clock(),
+    CurrentTabName = "TRANG CHỦ",
+    MenuOpen = true,
+    LiteMode = false,
+
+    -- Theme & UI Customization
+    Theme = {
+        Name = "Neon Violet & Blue",
+        Primary = Color3.fromRGB(147, 51, 234),
+        Accent = Color3.fromRGB(59, 130, 246),
+        Background = Color3.fromRGB(13, 15, 25),
+        Border = Color3.fromRGB(168, 85, 247),
+        Text = Color3.fromRGB(241, 245, 249),
+        BgTransparency = 0.14,
+        CornerRadius = 14,
+        AnimSpeed = 0.22,
+        Brightness = 0
+    },
+
+    -- Dynamic Island Config (Vị trí cố định chính giữa phía trên màn hình)
+    Island = {
+        Enabled = true,
+        Color = Color3.fromRGB(16, 19, 32),
+        Scale = 1.0,
+        Transparency = 0.12,
+        Glow = true,
+        Animation = true,
+        MiniOpen = false
+    },
+
+    -- Notification Config
+    NotifConfig = {
+        Duration = 3.8,
+        PositionMode = "Phải dưới",
+        Animation = true,
+        Sound = true,
+        MaxHistory = 100
+    },
+
+    -- Player & Movement
+    WalkSpeed = 16,
+    SprintEnabled = false,
+    SprintSpeed = 32,
+    JumpPower = 50,
+    FieldOfView = 70,
+    CameraZoom = 128,
+    CameraMode = "Mặc định",
+    CameraSpeed = 1.0,
+
+    -- Visual (Môi trường thử nghiệm được phép)
+    Visual = {
+        Enabled = false,
+        ShowName = true,
+        ShowDistance = true,
+        ShowHealth = true,
+        ShowCharInfo = false,
+        Highlight = true,
+        Color = Color3.fromRGB(168, 85, 247),
+        Transparency = 0.5,
+        TextSize = 12
+    },
+
+    -- Waypoints & History
+    Waypoints = {},
+    SelectedWaypoint = nil,
+    PreviousCFrame = nil,
+    ActionHistory = {},
+    ActivityLog = {},
+    Notifications = {},
+    UnreadCount = 0,
+
+    -- Profiles & Configs
+    ActiveProfile = "Mặc định",
+    Profiles = {
+        ["Mặc định"] = {
+            Name = "Mặc định",
+            Avatar = "🛡️",
+            ColorHex = "#9333EA",
+            WalkSpeed = 16,
+            SprintSpeed = 32,
+            JumpPower = 50,
+            FieldOfView = 70
+        }
+    },
+    SavedConfigs = {},
+    AutoSaveEnabled = false,
+    ToggleKey = Enum.KeyCode.RightControl,
+
+    -- Automation Tasks
+    Automation = {
+        Interval = 5,
+        AutoSaveConfig = false,
+        AutoUpdateDashboard = true,
+        AutoRefreshInfo = true,
+        AutoResetUi = false,
+        AutoSaveWaypoint = false,
+        AutoCheckLicense = false,
+        AutoUpdateClock = true
+    },
+
+    -- Plugins (Chỉ module nội bộ đã xác thực nguồn gốc)
+    Plugins = {
+        ["Tiện ích Tọa Độ Nhanh"] = {
+            Version = "1.0.0",
+            Author = "ANDZ Internal",
+            Enabled = true,
+            Compatible = true,
+            Error = nil,
+            Description = "Hỗ trợ định dạng tọa độ gọn gàng cho khu vực thử nghiệm."
+        },
+        ["Bộ Đếm Phiên Chơi"] = {
+            Version = "1.0.0",
+            Author = "ANDZ Internal",
+            Enabled = true,
+            Compatible = true,
+            Error = nil,
+            Description = "Theo dõi thời lượng phiên và mốc thời gian hoạt động."
+        }
+    }
+}
+
+--// ========================================================================
+--// SHARED MANAGERS (UI, THEME, HISTORY, NOTIFICATION, API)
+--// ========================================================================
+local ThemeManager = { BoundObjects = {} }
+local NotificationManager = {}
+local HistoryManager = {}
+
+local function ClampColor(c)
+    return Color3.new(
+        math.clamp(c.R, 0, 1),
+        math.clamp(c.G, 0, 1),
+        math.clamp(c.B, 0, 1)
+    )
+end
+
+local function ApplyBrightness(color, delta)
+    return ClampColor(Color3.new(color.R + delta, color.G + delta, color.B + delta))
+end
+
+local function ColorToHex(c)
+    local r = math.clamp(math.floor(c.R * 255 + 0.5), 0, 255)
+    local g = math.clamp(math.floor(c.G * 255 + 0.5), 0, 255)
+    local b = math.clamp(math.floor(c.B * 255 + 0.5), 0, 255)
+    return string.format("#%02X%02X%02X", r, g, b)
+end
+
+local function HexToColor(hex)
+    if type(hex) ~= "string" then return nil end
+    local clean = hex:gsub("#", ""):gsub("%s+", "")
+    if #clean ~= 6 or clean:match("[^0-9A-Fa-f]") then return nil end
+    local r = tonumber(clean:sub(1, 2), 16)
+    local g = tonumber(clean:sub(3, 4), 16)
+    local b = tonumber(clean:sub(5, 6), 16)
+    return Color3.fromRGB(r, g, b)
+end
+
+local function PlaySoundEffect(id, vol)
+    if not State.NotifConfig.Sound or State.LiteMode then return end
+    pcall(function()
+        local s = Instance.new("Sound")
+        s.SoundId = id or "rbxassetid://6895079853"
+        s.Volume = vol or 0.3
+        s.Parent = SoundService
+        s:Play()
+        task.delay(1.2, function()
+            if s then s:Destroy() end
+        end)
+    end)
+end
+
+local function Tween(inst, goal, duration, style, dir)
+    if not inst or not inst.Parent then return end
+    local dur = (State.Theme.AnimSpeed and not State.LiteMode) and (duration or State.Theme.AnimSpeed) or 0.01
+    local info = TweenInfo.new(dur, style or Enum.EasingStyle.Quint, dir or Enum.EasingDirection.Out)
+    local tw = TweenService:Create(inst, info, goal)
+    tw:Play()
+    return tw
+end
+
+function ThemeManager:Bind(obj, prop, role)
+    table.insert(self.BoundObjects, { Obj = obj, Prop = prop, Role = role })
+end
+
+function ThemeManager:GetRoleColor(role)
+    local b = State.Theme.Brightness or 0
+    if role == "Primary" then return ApplyBrightness(State.Theme.Primary, b)
+    elseif role == "Accent" then return ApplyBrightness(State.Theme.Accent, b)
+    elseif role == "Background" then return ApplyBrightness(State.Theme.Background, b)
+    elseif role == "Border" then return ApplyBrightness(State.Theme.Border, b)
+    elseif role == "Text" then return ApplyBrightness(State.Theme.Text, b)
+    end
+    return State.Theme.Primary
+end
+
+function ThemeManager:Refresh()
+    for i = #self.BoundObjects, 1, -1 do
+        local item = self.BoundObjects[i]
+        if not item.Obj or not item.Obj.Parent then
+            table.remove(self.BoundObjects, i)
+        else
+            if item.Prop == "Transparency" then
+                Tween(item.Obj, { BackgroundTransparency = State.Theme.BgTransparency }, 0.2)
+            elseif item.Prop == "CornerRadius" then
+                item.Obj.CornerRadius = UDim.new(0, State.Theme.CornerRadius)
+            else
+                Tween(item.Obj, { [item.Prop] = self:GetRoleColor(item.Role) }, 0.2)
+            end
+        end
+    end
+end
+
+function HistoryManager:PushAction(text)
+    local entry = string.format("[%s] %s", os.date("%H:%M:%S"), tostring(text))
+    table.insert(State.ActionHistory, 1, entry)
+    if #State.ActionHistory > 60 then
+        table.remove(State.ActionHistory)
+    end
+    table.insert(State.ActivityLog, 1, entry)
+    if #State.ActivityLog > 80 then
+        table.remove(State.ActivityLog)
+    end
+end
+
+local function CountActiveFeatures()
+    local count = 0
+    if State.SprintEnabled then count += 1 end
+    if State.Visual.Enabled then count += 1 end
+    if State.Island.Enabled then count += 1 end
+    if State.AutoSaveEnabled then count += 1 end
+    for _, v in pairs(State.Automation) do
+        if type(v) == "boolean" and v then
+            count += 1
+        end
+    end
+    return count
+end
+
+--// Khởi tạo Root ScreenGui
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local oldGui = PlayerGui:FindFirstChild("ANDZ_PREMIUM_V3_GUI")
+if oldGui then oldGui:Destroy() end
+
+local RootGui = CreateInst("ScreenGui", {
+    Name = "ANDZ_PREMIUM_V3_GUI",
+    ResetOnSpawn = false,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    IgnoreGuiInset = true
+}, PlayerGui)
+
+local function GetAutoScale()
+    local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+    if vp.X < 760 or vp.Y < 500 then
+        return math.clamp(vp.X / 840, 0.58, 0.86)
+    end
+    return 1.0
+end
+
+--// ========================================================================
+--// NOTIFICATION CENTER PRO (LỊCH SỬ, ĐÃ ĐỌC, XÓA, TÙY CHỈNH VỊ TRÍ)
+--// ========================================================================
+local NotifHolder = CreateInst("Frame", {
+    Name = "NotificationHolder",
+    Size = UDim2.new(0, 325, 0, 340),
+    Position = UDim2.new(1, -340, 1, -355),
+    BackgroundTransparency = 1,
+    ZIndex = 120
+}, RootGui)
+
+local NotifListLayout = CreateInst("UIListLayout", {
+    SortOrder = Enum.SortOrder.LayoutOrder,
+    VerticalAlignment = Enum.VerticalAlignment.Bottom,
+    Padding = UDim.new(0, 8)
+}, NotifHolder)
+
+local NotifRefreshCallbacks = {}
+
+function NotificationManager:SetPosition(mode)
+    State.NotifConfig.PositionMode = mode
+    if mode == "Phải trên" then
+        NotifHolder.Position = UDim2.new(1, -340, 0, 72)
+        NotifListLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+    elseif mode == "Trái dưới" then
+        NotifHolder.Position = UDim2.new(0, 15, 1, -355)
+        NotifListLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    else
+        NotifHolder.Position = UDim2.new(1, -340, 1, -355)
+        NotifListLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    end
+end
+
+local NotifPalette = {
+    ["Thành công"] = Color3.fromRGB(34, 197, 94),
+    ["Lỗi"] = Color3.fromRGB(239, 68, 68),
+    ["Cảnh báo"] = Color3.fromRGB(245, 158, 11),
+    ["Hệ thống"] = Color3.fromRGB(59, 130, 246)
+}
+
+function NotificationManager:Notify(title, message, kind, customDur)
+    kind = kind or "Hệ thống"
+    local dur = customDur or State.NotifConfig.Duration or 3.8
+    local accent = NotifPalette[kind] or NotifPalette["Hệ thống"]
+
+    table.insert(State.Notifications, 1, {
+        Id = HttpService:GenerateGUID(false),
+        Title = tostring(title),
+        Message = tostring(message),
+        Kind = kind,
+        Time = os.date("%H:%M:%S"),
+        Read = false
+    })
+    State.UnreadCount += 1
+    if #State.Notifications > State.NotifConfig.MaxHistory then
+        table.remove(State.Notifications)
+    end
+
+    PlaySoundEffect("rbxassetid://6895079853", 0.28)
+
+    local card = CreateInst("Frame", {
+        Size = UDim2.new(1, 0, 0, 72),
+        BackgroundColor3 = Color3.fromRGB(16, 19, 32),
+        BackgroundTransparency = 1,
+        ClipsDescendants = true
+    }, NotifHolder)
+    CreateInst("UICorner", { CornerRadius = UDim.new(0, 11) }, card)
+    local stroke = CreateInst("UIStroke", { Color = accent, Thickness = 1.3, Transparency = 1 }, card)
+    CreateInst("Frame", {
+        Size = UDim2.new(0, 4, 1, -14),
+        Position = UDim2.new(0, 7, 0, 7),
+        BackgroundColor3 = accent,
+        BorderSizePixel = 0
+    }, card)
+
+    CreateInst("TextLabel", {
+        Size = UDim2.new(1, -26, 0, 20),
+        Position = UDim2.new(0, 18, 0, 6),
+        BackgroundTransparency = 1,
+        Font = Enum.Font.GothamBold,
+        Text = string.upper(kind) .. " • " .. tostring(title),
+        TextColor3 = accent,
+        TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, card)
+
+    CreateInst("TextLabel", {
+        Size = UDim2.new(1, -24, 0, 36),
+        Position = UDim2.new(0, 18, 0, 26),
+        BackgroundTransparency = 1,
+        Font = Enum.Font.Gotham,
+        Text = tostring(message),
+        TextColor3 = Color3.fromRGB(235, 240, 252),
+        TextSize = 12,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top
+    }, card)
+
+    local barBg = CreateInst("Frame", {
+        Size = UDim2.new(1, -18, 0, 3),
+        Position = UDim2.new(0, 9, 1, -5),
+        BackgroundColor3 = Color3.fromRGB(35, 42, 66),
+        BorderSizePixel = 0
+    }, card)
+    local barFill = CreateInst("Frame", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = accent,
+        BorderSizePixel = 0
+    }, barBg)
+
+    if State.NotifConfig.Animation and not State.LiteMode then
+        Tween(card, { BackgroundTransparency = 0.08 }, 0.25)
+        Tween(stroke, { Transparency = 0.2 }, 0.25)
+    else
+        card.BackgroundTransparency = 0.08
+        stroke.Transparency = 0.2
+    end
+
+    TweenService:Create(barFill, TweenInfo.new(dur, Enum.EasingStyle.Linear), { Size = UDim2.new(0, 0, 1, 0) }):Play()
+
+    task.delay(dur, function()
+        if card and card.Parent then
+            Tween(card, { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0) }, 0.25)
+            Tween(stroke, { Transparency = 1 }, 0.2)
+            task.wait(0.26)
+            if card and card.Parent then card:Destroy() end
+        end
+    end)
+
+    for _, cb in ipairs(NotifRefreshCallbacks) do
+        pcall(cb)
+    end
+end
+
+function NotificationManager:MarkAllRead()
+    for _, item in ipairs(State.Notifications) do
+        item.Read = true
+    end
+    State.UnreadCount = 0
+    for _, cb in ipairs(NotifRefreshCallbacks) do pcall(cb) end
+end
+
+function NotificationManager:ClearOne(idx)
+    if State.Notifications[idx] then
+        if not State.Notifications[idx].Read then
+            State.UnreadCount = math.max(0, State.UnreadCount - 1)
+        end
+        table.remove(State.Notifications, idx)
+        for _, cb in ipairs(NotifRefreshCallbacks) do pcall(cb) end
+    end
+end
+
+function NotificationManager:ClearAll()
+    table.clear(State.Notifications)
+    State.UnreadCount = 0
+    for _, cb in ipairs(NotifRefreshCallbacks) do pcall(cb) end
+end
+
+--// Drag Helper (Chỉ dùng cho Main Window và Mini Dashboard, KHÔNG dùng cho Dynamic Island)
+local function EnableDrag(target, handle)
+    handle = handle or target
+    local dragging, dragStart, startPos, activeInput = false, nil, nil, nil
+    TrackConn(handle.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            activeInput = inp
+            dragStart = inp.Position
+            startPos = target.Position
+            inp.Changed:Connect(function()
+                if inp.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end))
+    TrackConn(UserInputService.InputChanged:Connect(function(inp)
+        if dragging and inp == activeInput and (inp.UserInputType == Enum.UserInputType.MouseMovement or inp.UserInputType == Enum.UserInputType.Touch) then
+            local delta = inp.Position - dragStart
+            target.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end))
+end
+
+--// ========================================================================
+--// DYNAMIC ISLAND PRO (CỐ ĐỊNH CHÍNH GIỮA PHÍA TRÊN, KHÔNG KÉO THẢ)
+--// ========================================================================
+local IslandGui = CreateInst("Frame", {
+    Name = "DynamicIslandFixed",
+    AnchorPoint = Vector2.new(0.5, 0),
+    Size = UDim2.new(0, 430, 0, 42),
+    Position = UDim2.new(0.5, 0, 0, 12), -- Luôn cố định chính giữa phía trên
+    BackgroundColor3 = State.Island.Color,
+    BackgroundTransparency = State.Island.Transparency,
+    Visible = false,
+    ZIndex = 110
+}, RootGui)
+
+local IslandScale = CreateInst("UIScale", { Scale = State.Island.Scale }, IslandGui)
+local IslandCorner = CreateInst("UICorner", { CornerRadius = UDim.new(1, 0) }, IslandGui)
+local IslandStroke = CreateInst("UIStroke", {
+    Color = State.Theme.Primary,
+    Thickness = 1.6,
+    Transparency = State.Island.Glow and 0.15 or 1
+}, IslandGui)
+ThemeManager:Bind(IslandStroke, "Color", "Primary")
+
+local IslandStatusLbl = CreateInst("TextLabel", {
+    Size = UDim2.new(1, -24, 1, 0),
+    Position = UDim2.new(0, 12, 0, 0),
+    BackgroundTransparency = 1,
+    Font = Enum.Font.GothamBold,
+    Text = "ANDZ PREMIUM  |  VERIFIED  |  FPS: --  |  PING: --",
+    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 11,
+    TextTruncate = Enum.TextTruncate.AtEnd
+}, IslandGui)
+
+-- Mini Dashboard khi nhấn giữ Dynamic Island
+local MiniDashFrame = CreateInst("Frame", {
+    Name = "IslandMiniDashboard",
+    AnchorPoint = Vector2.new(0.5, 0),
+    Size = UDim2.new(0, 310, 0, 152),
+    Position = UDim2.new(0.5, 0, 0, 62),
+    BackgroundColor3 = Color3.fromRGB(15, 18, 30),
+    BackgroundTransparency = 0.08,
+    Visible = false,
+    ZIndex = 115
+}, RootGui)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 14) }, MiniDashFrame)
+local MiniStroke = CreateInst("UIStroke", { Color = State.Theme.Accent, Thickness = 1.5 }, MiniDashFrame)
+ThemeManager:Bind(MiniStroke, "Color", "Accent")
+EnableDrag(MiniDashFrame, MiniDashFrame)
+
+local MiniInfoLbl = CreateInst("TextLabel", {
+    Size = UDim2.new(1, -20, 0, 88),
+    Position = UDim2.new(0, 10, 0, 8),
+    BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium,
+    Text = "ANDZ PREMIUM MINI DASHBOARD\nFPS: -- | Ping: --\nLicense: --",
+    TextColor3 = Color3.fromRGB(238, 242, 255),
+    TextSize = 12,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top
+}, MiniDashFrame)
+
+local MiniOpenBtn = CreateInst("TextButton", {
+    Size = UDim2.new(0.48, -12, 0, 34),
+    Position = UDim2.new(0, 10, 1, -44),
+    BackgroundColor3 = State.Theme.Primary,
+    Font = Enum.Font.GothamBold,
+    Text = "MỞ MENU",
+    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 12
+}, MiniDashFrame)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, MiniOpenBtn)
+ThemeManager:Bind(MiniOpenBtn, "BackgroundColor3", "Primary")
+
+local MiniCloseBtn = CreateInst("TextButton", {
+    Size = UDim2.new(0.48, -12, 0, 34),
+    Position = UDim2.new(0.52, 2, 1, -44),
+    BackgroundColor3 = Color3.fromRGB(36, 42, 66),
+    Font = Enum.Font.GothamBold,
+    Text = "ĐÓNG BẢNG MINI",
+    TextColor3 = Color3.fromRGB(226, 232, 240),
+    TextSize = 11
+}, MiniDashFrame)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, MiniCloseBtn)
+
+-- Click nút trên Island để mở rộng lại Main Menu (giữ nguyên tab cũ và trạng thái)
+local IslandClickTrigger = CreateInst("TextButton", {
+    Size = UDim2.new(1, 0, 1, 0),
+    BackgroundTransparency = 1,
+    Text = "",
+    ZIndex = 112
+}, IslandGui)
+
+local IslandManager = {}
+local holdStartClock = nil
+local holdTriggered = false
+
+function IslandManager:SyncSettings()
+    IslandGui.BackgroundColor3 = State.Island.Color
+    IslandGui.BackgroundTransparency = State.Island.Transparency
+    IslandScale.Scale = State.Island.Scale
+    IslandStroke.Transparency = State.Island.Glow and 0.15 or 1
+    IslandGui.Position = UDim2.new(0.5, 0, 0, 12) -- Luôn giữ cố định vị trí
+
+    if not State.Authenticated or not State.Island.Enabled then
+        IslandGui.Visible = false
+        MiniDashFrame.Visible = false
+        State.Island.MiniOpen = false
+        return
+    end
+
+    if not State.MenuOpen then
+        IslandGui.Visible = true
+        if State.Island.Animation and not State.LiteMode then
+            IslandScale.Scale = State.Island.Scale * 0.85
+            Tween(IslandScale, { Scale = State.Island.Scale }, 0.22, Enum.EasingStyle.Back)
+        end
+    else
+        IslandGui.Visible = false
+        MiniDashFrame.Visible = false
+        State.Island.MiniOpen = false
+    end
+end
+
+function IslandManager:UpdateTelemetry(fps, ping)
+    if not IslandGui.Visible and not MiniDashFrame.Visible then return end
+    local licShort = State.Authenticated and "ACTIVE" or "LOCKED"
+    IslandStatusLbl.Text = string.format("%s  |  %s  |  FPS: %d  |  PING: %dms", ANDZ_V3.Brand, licShort, fps, ping)
+    MiniInfoLbl.Text = string.format(
+        "%s (%s)\nFPS: %d  |  Ping: %d ms\nLicense: %s (Hết hạn: %s)",
+        ANDZ_V3.Brand, ANDZ_V3.Version, fps, ping, State.LicenseStatus, tostring(State.LicenseExpiry)
+    )
+end
+
+--// ========================================================================
+--// MAIN MENU FRAMEWORK & COMPONENT ENGINE (DÙNG CHUNG TOÀN BỘ V3)
+--// ========================================================================
+local MainFrame = CreateInst("Frame", {
+    Name = "MainWindowV3",
+    Size = UDim2.new(0, 740, 0, 470),
+    Position = UDim2.new(0.5, -370, 0.5, -235),
+    BackgroundColor3 = State.Theme.Background,
+    BackgroundTransparency = State.Theme.BgTransparency,
+    Visible = false,
+    ClipsDescendants = true
+}, RootGui)
+
+local MainScale = CreateInst("UIScale", { Scale = GetAutoScale() }, MainFrame)
+local MainCorner = CreateInst("UICorner", { CornerRadius = UDim.new(0, State.Theme.CornerRadius) }, MainFrame)
+local MainStroke = CreateInst("UIStroke", { Color = State.Theme.Border, Thickness = 1.6, Transparency = 0.2 }, MainFrame)
+local MainGrad = CreateInst("UIGradient", {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(24, 24, 44)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(13, 15, 25)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(16, 28, 52))
+    }),
+    Rotation = 135
+}, MainFrame)
+
+ThemeManager:Bind(MainFrame, "BackgroundColor3", "Background")
+ThemeManager:Bind(MainFrame, "Transparency", "Background")
+ThemeManager:Bind(MainCorner, "CornerRadius", "CornerRadius")
+ThemeManager:Bind(MainStroke, "Color", "Border")
+
+-- Topbar
+local Topbar = CreateInst("Frame", {
+    Size = UDim2.new(1, 0, 0, 50),
+    BackgroundColor3 = Color3.fromRGB(17, 20, 34),
+    BackgroundTransparency = 0.3,
+    BorderSizePixel = 0
+}, MainFrame)
+EnableDrag(MainFrame, Topbar)
+
+CreateInst("TextLabel", {
+    Size = UDim2.new(0, 260, 0, 22),
+    Position = UDim2.new(0, 16, 0, 6),
+    BackgroundTransparency = 1,
+    Font = Enum.Font.GothamBlack,
+    Text = ANDZ_V3.Brand .. "  •  " .. ANDZ_V3.Version,
+    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 15,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Topbar)
+
+local TopSubLbl = CreateInst("TextLabel", {
+    Size = UDim2.new(0, 380, 0, 16),
+    Position = UDim2.new(0, 16, 0, 28),
+    BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium,
+    Text = "Người chơi: " .. LocalPlayer.DisplayName .. " | Hồ sơ: " .. State.ActiveProfile,
+    TextColor3 = Color3.fromRGB(165, 178, 210),
+    TextSize = 11,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Topbar)
+
+local CollapseBtn = CreateInst("TextButton", {
+    Size = UDim2.new(0, 82, 0, 28),
+    Position = UDim2.new(1, -166, 0.5, -14),
+    BackgroundColor3 = Color3.fromRGB(32, 38, 62),
+    Font = Enum.Font.GothamBold,
+    Text = "THU GỌN",
+    TextColor3 = Color3.fromRGB(192, 132, 252),
+    TextSize = 11
+}, Topbar)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 7) }, CollapseBtn)
+
+local MinBtn = CreateInst("TextButton", {
+    Size = UDim2.new(0, 30, 0, 28),
+    Position = UDim2.new(1, -76, 0.5, -14),
+    BackgroundColor3 = Color3.fromRGB(32, 38, 62),
+    Font = Enum.Font.GothamBold,
+    Text = "—",
+    TextColor3 = Color3.fromRGB(226, 232, 240),
+    TextSize = 13
+}, Topbar)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 7) }, MinBtn)
+
+local CloseAllBtn = CreateInst("TextButton", {
+    Size = UDim2.new(0, 30, 0, 28),
+    Position = UDim2.new(1, -40, 0.5, -14),
+    BackgroundColor3 = Color3.fromRGB(58, 24, 38),
+    Font = Enum.Font.GothamBold,
+    Text = "✕",
+    TextColor3 = Color3.fromRGB(248, 113, 113),
+    TextSize = 13
+}, Topbar)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 7) }, CloseAllBtn)
+
+-- Sidebar
+local Sidebar = CreateInst("Frame", {
+    Size = UDim2.new(0, 190, 1, -50),
+    Position = UDim2.new(0, 0, 0, 50),
+    BackgroundColor3 = Color3.fromRGB(15, 18, 30),
+    BackgroundTransparency = 0.25,
+    BorderSizePixel = 0
+}, MainFrame)
+
+local TabScroll = CreateInst("ScrollingFrame", {
+    Size = UDim2.new(1, -12, 1, -16),
+    Position = UDim2.new(0, 6, 0, 8),
+    BackgroundTransparency = 1,
+    ScrollBarThickness = 2,
+    CanvasSize = UDim2.new(0, 0, 0, 0),
+    AutomaticCanvasSize = Enum.AutomaticSize.Y
+}, Sidebar)
+CreateInst("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4) }, TabScroll)
+
+local ContentFrame = CreateInst("Frame", {
+    Size = UDim2.new(1, -190, 1, -50),
+    Position = UDim2.new(0, 190, 0, 50),
+    BackgroundTransparency = 1,
+    ClipsDescendants = true
+}, MainFrame)
+
+local TabsRegistry = {}
+local CommandRegistry = {}
+
+local function RegisterCommand(name, desc, fn)
+    table.insert(CommandRegistry, { Name = name, Desc = desc, Run = fn })
+end
+
+local function SelectTabByName(tabName)
+    local target = TabsRegistry[tabName]
+    if not target then return end
+    State.CurrentTabName = tabName
+    for name, t in pairs(TabsRegistry) do
+        local active = (name == tabName)
+        t.Page.Visible = active
+        Tween(t.Btn, { BackgroundTransparency = active and 0.22 or 1 }, 0.16)
+        Tween(t.Label, { TextColor3 = active and Color3.new(1, 1, 1) or Color3.fromRGB(165, 176, 206) }, 0.16)
+    end
+    if State.NotifConfig.Animation and not State.LiteMode then
+        target.Page.Position = UDim2.new(0, 22, 0, 8)
+        Tween(target.Page, { Position = UDim2.new(0, 10, 0, 8) }, 0.18)
+    end
+end
+
+local function CreateTab(name, icon)
+    local btn = CreateInst("TextButton", {
+        Size = UDim2.new(1, 0, 0, 34),
+        BackgroundColor3 = Color3.fromRGB(30, 35, 58),
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false
+    }, TabScroll)
+    CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, btn)
+
+    CreateInst("TextLabel", {
+        Size = UDim2.new(0, 24, 1, 0),
+        Position = UDim2.new(0, 6, 0, 0),
+        BackgroundTransparency = 1,
+        Font = Enum.Font.GothamBold,
+        Text = icon or "•",
+        TextColor3 = Color3.fromRGB(192, 132, 252),
+        TextSize = 13
+    }, btn)
+
+    local lbl = CreateInst("TextLabel", {
+        Size = UDim2.new(1, -34, 1, 0),
+        Position = UDim2.new(0, 32, 0, 0),
+        BackgroundTransparency = 1,
+        Font = Enum.Font.GothamSemibold,
+        Text = name,
+        TextColor3 = Color3.fromRGB(165, 176, 206),
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd
+    }, btn)
+
+    local page = CreateInst("ScrollingFrame", {
+        Name = "Page_" .. name,
+        Size = UDim2.new(1, -20, 1, -16),
+        Position = UDim2.new(0, 10, 0, 8),
+        BackgroundTransparency = 1,
+        ScrollBarThickness = 3,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        Visible = false
+    }, ContentFrame)
+
+    CreateInst("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8) }, page)
+    CreateInst("UIPadding", { PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 12) }, page)
+
+    btn.MouseButton1Click:Connect(function()
+        PlaySoundEffect("rbxassetid://6895079853", 0.2)
+        SelectTabByName(name)
+    end)
+
+    TabsRegistry[name] = { Btn = btn, Label = lbl, Page = page }
+    if State.CurrentTabName == name then
+        SelectTabByName(name)
+    end
+
+    RegisterCommand("Mở " .. name, "Chuyển nhanh tới tab " .. name, function()
+        SelectTabByName(name)
+        NotificationManager:Notify("Điều hướng", "Đã mở tab " .. name, "Hệ thống", 2)
+    end)
+
+    local TabApi = {}
+
+    function TabApi:CreateSection(title)
+        local card = CreateInst("Frame", {
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundColor3 = Color3.fromRGB(20, 23, 38),
+            BackgroundTransparency = 0.25
+        }, page)
+        CreateInst("UICorner", { CornerRadius = UDim.new(0, 10) }, card)
+        CreateInst("UIStroke", { Color = Color3.fromRGB(55, 62, 98), Thickness = 1, Transparency = 0.35 }, card)
+        CreateInst("UIPadding", {
+            PaddingTop = UDim.new(0, 8),
+            PaddingBottom = UDim.new(0, 10),
+            PaddingLeft = UDim.new(0, 10),
+            PaddingRight = UDim.new(0, 10)
+        }, card)
+        CreateInst("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6) }, card)
+
+        CreateInst("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 18),
+            BackgroundTransparency = 1,
+            Font = Enum.Font.GothamBold,
+            Text = string.upper(title),
+            TextColor3 = Color3.fromRGB(192, 132, 252),
+            TextSize = 11,
+            TextXAlignment = Enum.TextXAlignment.Left
+        }, card)
+
+        local Sec = {}
+
+        function Sec:CreateLabel(txt)
+            local box = CreateInst("Frame", {
+                Size = UDim2.new(1, 0, 0, 28),
+                BackgroundColor3 = Color3.fromRGB(26, 30, 48),
+                BackgroundTransparency = 0.35
+            }, card)
+            CreateInst("UICorner", { CornerRadius = UDim.new(0, 7) }, box)
+            local lblObj = CreateInst("TextLabel", {
+                Size = UDim2.new(1, -16, 1, 0),
+                Position = UDim2.new(0, 8, 0, 0),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamMedium,
+                Text = tostring(txt),
+                TextColor3 = Color3.fromRGB(228, 234, 246),
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd
+            }, box)
+            return {
+                SetText = function(_, t) if lblObj then lblObj.Text = tostring(t) end end
+            }
+        end
+
+        function Sec:CreateButton(txt, cb)
+            local b = CreateInst("TextButton", {
+                Size = UDim2.new(1, 0, 0, 32),
+                BackgroundColor3 = Color3.fromRGB(32, 37, 60),
+                Font = Enum.Font.GothamSemibold,
+                Text = tostring(txt),
+                TextColor3 = Color3.new(1, 1, 1),
+                TextSize = 12,
+                AutoButtonColor = false
+            }, card)
+            CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, b)
+            local st = CreateInst("UIStroke", { Color = State.Theme.Primary, Thickness = 1, Transparency = 0.55 }, b)
+            ThemeManager:Bind(st, "Color", "Primary")
+
+            b.MouseEnter:Connect(function()
+                Tween(b, { BackgroundColor3 = Color3.fromRGB(45, 52, 82) }, 0.14)
+            end)
+            b.MouseLeave:Connect(function()
+                Tween(b, { BackgroundColor3 = Color3.fromRGB(32, 37, 60) }, 0.14)
+            end)
+            b.MouseButton1Click:Connect(function()
+                PlaySoundEffect("rbxassetid://6895079853", 0.25)
+                if cb then pcall(cb, txt) end
+            end)
+            return b
+        end
+
+        function Sec:CreateToggle(txt, defaultVal, cb)
+            local val = defaultVal and true or false
+            local row = CreateInst("TextButton", {
+                Size = UDim2.new(1, 0, 0, 34),
+                BackgroundColor3 = Color3.fromRGB(26, 30, 48),
+                BackgroundTransparency = 0.3,
+                Text = "",
+                AutoButtonColor = false
+            }, card)
+            CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, row)
+
+            CreateInst("TextLabel", {
+                Size = UDim2.new(1, -64, 1, 0),
+                Position = UDim2.new(0, 10, 0, 0),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamMedium,
+                Text = tostring(txt),
+                TextColor3 = Color3.fromRGB(235, 240, 250),
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left
+            }, row)
+
+            local track = CreateInst("Frame", {
+                Size = UDim2.new(0, 40, 0, 20),
+                Position = UDim2.new(1, -50, 0.5, -10),
+                BackgroundColor3 = val and State.Theme.Primary or Color3.fromRGB(52, 60, 88)
+            }, row)
+            CreateInst("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+
+            local knob = CreateInst("Frame", {
+                Size = UDim2.new(0, 14, 0, 14),
+                Position = val and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7),
+                BackgroundColor3 = Color3.new(1, 1, 1)
+            }, track)
+            CreateInst("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
+
+            local function ApplyVal(newV, fire)
+                val = newV and true or false
+                Tween(track, { BackgroundColor3 = val and State.Theme.Primary or Color3.fromRGB(52, 60, 88) }, 0.16)
+                Tween(knob, { Position = val and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7) }, 0.16)
+                if fire and cb then pcall(cb, val) end
+            end
+
+            row.MouseButton1Click:Connect(function()
+                PlaySoundEffect("rbxassetid://6895079853", 0.2)
+                ApplyVal(not val, true)
+            end)
+
+            return {
+                Set = function(_, v) ApplyVal(v, true) end,
+                Get = function() return val end
+            }
+        end
+
+        function Sec:CreateSlider(txt, minV, maxV, defV, cb)
+            local cur = math.clamp(defV or minV, minV, maxV)
+            local box = CreateInst("Frame", {
+                Size = UDim2.new(1, 0, 0, 46),
+                BackgroundColor3 = Color3.fromRGB(26, 30, 48),
+                BackgroundTransparency = 0.3
+            }, card)
+            CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, box)
+
+            CreateInst("TextLabel", {
+                Size = UDim2.new(0.7, 0, 0, 20),
+                Position = UDim2.new(0, 10, 0, 4),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamMedium,
+                Text = tostring(txt),
+                TextColor3 = Color3.fromRGB(235, 240, 250),
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left
+            }, box)
+
+            local valLbl = CreateInst("TextLabel", {
+                Size = UDim2.new(0.28, -10, 0, 20),
+                Position = UDim2.new(0.72, 0, 0, 4),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamBold,
+                Text = tostring(cur),
+                TextColor3 = Color3.fromRGB(192, 132, 252),
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Right
+            }, box)
+
+            local bar = CreateInst("TextButton", {
+                Size = UDim2.new(1, -20, 0, 7),
+                Position = UDim2.new(0, 10, 0, 30),
+                BackgroundColor3 = Color3.fromRGB(42, 48, 74),
+                Text = "",
+                AutoButtonColor = false
+            }, box)
+            CreateInst("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+
+            local initPct = (cur - minV) / math.max(maxV - minV, 0.0001)
+            local fill = CreateInst("Frame", {
+                Size = UDim2.new(initPct, 0, 1, 0),
+                BackgroundColor3 = State.Theme.Primary,
+                BorderSizePixel = 0
+            }, bar)
+            CreateInst("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+            ThemeManager:Bind(fill, "BackgroundColor3", "Primary")
+
+            local dragging = false
+            local function SetFromX(px, fire)
+                local pct = math.clamp((px - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
+                local raw = minV + (maxV - minV) * pct
+                if (maxV - minV) <= 5 then
+                    cur = math.floor(raw * 100 + 0.5) / 100
+                else
+                    cur = math.floor(raw + 0.5)
+                end
+                valLbl.Text = tostring(cur)
+                fill.Size = UDim2.new(pct, 0, 1, 0)
+                if fire and cb then pcall(cb, cur) end
+            end
+
+            bar.InputBegan:Connect(function(inp)
+                if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+                    dragging = true
+                    SetFromX(inp.Position.X, true)
+                end
+            end)
+            TrackConn(UserInputService.InputChanged:Connect(function(inp)
+                if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement or inp.UserInputType == Enum.UserInputType.Touch) then
+                    SetFromX(inp.Position.X, true)
+                end
+            end))
+            TrackConn(UserInputService.InputEnded:Connect(function(inp)
+                if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+                    dragging = false
+                end
+            end))
+
+            return {
+                Set = function(_, v)
+                    cur = math.clamp(v, minV, maxV)
+                    local pct = (cur - minV) / math.max(maxV - minV, 0.0001)
+                    valLbl.Text = tostring(cur)
+                    fill.Size = UDim2.new(pct, 0, 1, 0)
+                    if cb then pcall(cb, cur) end
+                end,
+                Get = function() return cur end
+            }
+        end
+
+        function Sec:CreateDropdown(txt, opts, cb)
+            local open = false
+            local list = opts or {}
+            local chosen = list[1] or "Trống"
+
+            local frame = CreateInst("Frame", {
+                Size = UDim2.new(1, 0, 0, 34),
+                BackgroundColor3 = Color3.fromRGB(26, 30, 48),
+                BackgroundTransparency = 0.3,
+                ClipsDescendants = true
+            }, card)
+            CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, frame)
+
+            local headBtn = CreateInst("TextButton", {
+                Size = UDim2.new(1, 0, 0, 34),
+                BackgroundTransparency = 1,
+                Text = ""
+            }, frame)
+
+            CreateInst("TextLabel", {
+                Size = UDim2.new(0.52, 0, 1, 0),
+                Position = UDim2.new(0, 10, 0, 0),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamMedium,
+                Text = tostring(txt),
+                TextColor3 = Color3.fromRGB(235, 240, 250),
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left
+            }, headBtn)
+
+            local chosenLbl = CreateInst("TextLabel", {
+                Size = UDim2.new(0.45, -14, 1, 0),
+                Position = UDim2.new(0.53, 0, 0, 0),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamBold,
+                Text = tostring(chosen) .. " ▼",
+                TextColor3 = Color3.fromRGB(192, 132, 252),
+                TextSize = 11,
+                TextXAlignment = Enum.TextXAlignment.Right,
+                TextTruncate = Enum.TextTruncate.AtEnd
+            }, headBtn)
+
+            local optHolder = CreateInst("Frame", {
+                Size = UDim2.new(1, -12, 0, 0),
+                Position = UDim2.new(0, 6, 0, 38),
+                BackgroundTransparency = 1
+            }, frame)
+            CreateInst("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4) }, optHolder)
+
+            local function Build(newList)
+                for _, c in ipairs(optHolder:GetChildren()) do
+                    if c:IsA("TextButton") then c:Destroy() end
+                end
+                list = newList or {}
+                for _, item in ipairs(list) do
+                    local ob = CreateInst("TextButton", {
+                        Size = UDim2.new(1, 0, 0, 26),
+                        BackgroundColor3 = Color3.fromRGB(36, 42, 68),
+                        Font = Enum.Font.Gotham,
+                        Text = tostring(item),
+                        TextColor3 = Color3.new(1, 1, 1),
+                        TextSize = 11
+                    }, optHolder)
+                    CreateInst("UICorner", { CornerRadius = UDim.new(0, 6) }, ob)
+                    ob.MouseButton1Click:Connect(function()
+                        chosen = item
+                        open = false
+                        chosenLbl.Text = tostring(chosen) .. " ▼"
+                        Tween(frame, { Size = UDim2.new(1, 0, 0, 34) }, 0.18)
+                        if cb then pcall(cb, chosen) end
+                    end)
+                end
+            end
+            Build(list)
+
+            headBtn.MouseButton1Click:Connect(function()
+                open = not open
+                local h = open and (42 + math.max(#list, 1) * 30) or 34
+                chosenLbl.Text = tostring(chosen) .. (open and " ▲" or " ▼")
+                Tween(frame, { Size = UDim2.new(1, 0, 0, h) }, 0.18)
+            end)
+
+            return {
+                Refresh = function(_, newOpts, autoSelect)
+                    Build(newOpts)
+                    if #newOpts > 0 then
+                        chosen = autoSelect or newOpts[1]
+                        chosenLbl.Text = tostring(chosen) .. " ▼"
+                    else
+                        chosen = "Trống"
+                        chosenLbl.Text = "Trống ▼"
+                    end
+                end,
+                Get = function() return chosen end
+            }
+        end
+
+        function Sec:CreateInput(txt, ph, cb)
+            local box = CreateInst("Frame", {
+                Size = UDim2.new(1, 0, 0, 34),
+                BackgroundColor3 = Color3.fromRGB(26, 30, 48),
+                BackgroundTransparency = 0.3
+            }, card)
+            CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, box)
+
+            CreateInst("TextLabel", {
+                Size = UDim2.new(0.42, 0, 1, 0),
+                Position = UDim2.new(0, 10, 0, 0),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamMedium,
+                Text = tostring(txt),
+                TextColor3 = Color3.fromRGB(235, 240, 250),
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left
+            }, box)
+
+            local tb = CreateInst("TextBox", {
+                Size = UDim2.new(0.55, -10, 0, 24),
+                Position = UDim2.new(0.45, 0, 0.5, -12),
+                BackgroundColor3 = Color3.fromRGB(15, 18, 30),
+                Font = Enum.Font.Gotham,
+                PlaceholderText = ph or "Nhập...",
+                Text = "",
+                TextColor3 = Color3.new(1, 1, 1),
+                PlaceholderColor3 = Color3.fromRGB(120, 132, 162),
+                TextSize = 11,
+                ClearTextOnFocus = false
+            }, box)
+            CreateInst("UICorner", { CornerRadius = UDim.new(0, 6) }, tb)
+
+            tb.FocusLost:Connect(function(enter)
+                if cb then pcall(cb, tb.Text, enter) end
+            end)
+
+            return {
+                Get = function() return tb.Text end,
+                Set = function(_, v) tb.Text = tostring(v) end
+            }
+        end
+
+        function Sec:CreateKeybind(txt, defKey, cb)
+            local bound = defKey or Enum.KeyCode.RightControl
+            local listening = false
+            local row = CreateInst("Frame", {
+                Size = UDim2.new(1, 0, 0, 34),
+                BackgroundColor3 = Color3.fromRGB(26, 30, 48),
+                BackgroundTransparency = 0.3
+            }, card)
+            CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, row)
+
+            CreateInst("TextLabel", {
+                Size = UDim2.new(1, -120, 1, 0),
+                Position = UDim2.new(0, 10, 0, 0),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamMedium,
+                Text = tostring(txt),
+                TextColor3 = Color3.fromRGB(235, 240, 250),
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left
+            }, row)
+
+            local kBtn = CreateInst("TextButton", {
+                Size = UDim2.new(0, 102, 0, 24),
+                Position = UDim2.new(1, -110, 0.5, -12),
+                BackgroundColor3 = Color3.fromRGB(36, 42, 68),
+                Font = Enum.Font.GothamBold,
+                Text = bound.Name,
+                TextColor3 = Color3.fromRGB(192, 132, 252),
+                TextSize = 11
+            }, row)
+            CreateInst("UICorner", { CornerRadius = UDim.new(0, 6) }, kBtn)
+
+            kBtn.MouseButton1Click:Connect(function()
+                listening = true
+                kBtn.Text = "Nhấn phím..."
+            end)
+
+            TrackConn(UserInputService.InputBegan:Connect(function(inp, gpe)
+                if listening and inp.UserInputType == Enum.UserInputType.Keyboard then
+                    listening = false
+                    bound = inp.KeyCode
+                    kBtn.Text = bound.Name
+                    if cb then pcall(cb, bound) end
+                elseif not listening and not gpe and State.Authenticated and inp.KeyCode == bound then
+                    State.MenuOpen = not State.MenuOpen
+                    MainFrame.Visible = State.MenuOpen
+                    IslandManager:SyncSettings()
+                end
+            end))
+
+            return {
+                SetKey = function(_, k)
+                    bound = k
+                    kBtn.Text = k.Name
+                end,
+                GetKey = function() return bound end
+            }
+        end
+
+        return Sec
+    end
+
+    return TabApi
+end
+
+--// Nút điều khiển trên Topbar & Dynamic Island
+CollapseBtn.MouseButton1Click:Connect(function()
+    State.MenuOpen = false
+    MainFrame.Visible = false
+    IslandManager:SyncSettings()
+    NotificationManager:Notify("Dynamic Island", "Đã thu gọn menu lên Dynamic Island phía trên.", "Hệ thống", 2.5)
+end)
+
+MinBtn.MouseButton1Click:Connect(function()
+    State.MenuOpen = false
+    MainFrame.Visible = false
+    IslandManager:SyncSettings()
+end)
+
+CloseAllBtn.MouseButton1Click:Connect(function()
+    for _, c in ipairs(Registry.Connections) do
+        if c and c.Connected then c:Disconnect() end
+    end
+    for _, inst in ipairs(Registry.Instances) do
+        if inst and inst.Parent then pcall(function() inst:Destroy() end) end
+    end
+    for _, vis in pairs(Registry.Visuals) do
+        if vis.Highlight then pcall(function() vis.Highlight:Destroy() end) end
+        if vis.Billboard then pcall(function() vis.Billboard:Destroy() end) end
+    end
+    if RootGui and RootGui.Parent then RootGui:Destroy() end
+end)
+
+-- Nhấn mở lại tab cũ; Nhấn giữ (~0.45s) mở Mini Dashboard
+IslandClickTrigger.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+        holdStartClock = os.clock()
+        holdTriggered = false
+        task.delay(0.45, function()
+            if holdStartClock and not holdTriggered and State.Island.Enabled and not State.MenuOpen then
+                holdTriggered = true
+                State.Island.MiniOpen = not State.Island.MiniOpen
+                MiniDashFrame.Visible = State.Island.MiniOpen
+            end
+        end)
+    end
+end)
+
+IslandClickTrigger.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+        if not holdTriggered then
+            holdStartClock = nil
+            State.MenuOpen = true
+            State.Island.MiniOpen = false
+            MiniDashFrame.Visible = false
+            IslandManager:SyncSettings()
+            MainFrame.Visible = true
+            SelectTabByName(State.CurrentTabName)
+        else
+            holdStartClock = nil
+        end
+    end
+end)
+
+MiniOpenBtn.MouseButton1Click:Connect(function()
+    State.MenuOpen = true
+    State.Island.MiniOpen = false
+    MiniDashFrame.Visible = false
+    IslandManager:SyncSettings()
+    MainFrame.Visible = true
+    SelectTabByName(State.CurrentTabName)
+end)
+
+MiniCloseBtn.MouseButton1Click:Connect(function()
+    State.Island.MiniOpen = false
+    MiniDashFrame.Visible = false
+end)
+
+--// ========================================================================
+--// TẠO CÁC TAB CHÍNH (PHẦN 1/2: DASHBOARD, CHARACTER, VISUAL, CAMERA, MOVEMENT, WAYPOINT)
+--// ========================================================================
+local DashTab = CreateTab("TRANG CHỦ", "🏠")
+local CharTab = CreateTab("NHÂN VẬT", "👤")
+local VisTab = CreateTab("HIỂN THỊ", "👁️")
+local CamTab = CreateTab("CAMERA", "🎥")
+local MoveTab = CreateTab("DI CHUYỂN", "🏃")
+local WpTab = CreateTab("ĐIỂM ĐÁNH DẤU", "📍")
+
+-- I. NEW DASHBOARD
+local D_Acc = DashTab:CreateSection("Thông tin tài khoản & License")
+local LblAccount = D_Acc:CreateLabel("Tài khoản: " .. LocalPlayer.DisplayName .. " (@" .. LocalPlayer.Name .. " | ID: " .. LocalPlayer.UserId .. ")")
+local LblLicense = D_Acc:CreateLabel("Trạng thái License: " .. State.LicenseStatus .. " | Hạn: " .. State.LicenseExpiry)
+
+local D_Perf = DashTab:CreateSection("Hiệu năng trực tiếp & Thời gian")
+local LblFps = D_Perf:CreateLabel("FPS trực tiếp: --")
+local LblPing = D_Perf:CreateLabel("Ping trực tiếp: -- ms")
+local LblUptime = D_Perf:CreateLabel("Thời gian hoạt động: 00:00:00")
+local LblClock = D_Perf:CreateLabel("Đồng hồ thời gian thực: " .. os.date("%H:%M:%S"))
+local LblPerfChart = D_Perf:CreateLabel("Biểu đồ hiệu suất: [..........]")
+
+local D_Sys = DashTab:CreateSection("Máy chủ, Chức năng & Cấu hình")
+local LblServer = D_Sys:CreateLabel("Máy chủ: PlaceId " .. tostring(game.PlaceId) .. " | Người chơi: " .. #Players:GetPlayers())
+local LblActiveCount = D_Sys:CreateLabel("Chức năng đang bật: 0")
+local LblActiveCfg = D_Sys:CreateLabel("Cấu hình hiện tại: " .. State.ActiveProfile .. " | Theme: " .. State.Theme.Name)
+
+local D_Quick = DashTab:CreateSection("Thao tác nhanh & Nhật ký")
+local LblRecentAct = D_Quick:CreateLabel("Thao tác gần đây: Chưa có thao tác")
+local LblActHist = D_Quick:CreateLabel("Lịch sử hoạt động: 0 bản ghi")
+
+D_Quick:CreateButton("Làm mới Dashboard ngay", function()
+    HistoryManager:PushAction("Làm mới thủ công Dashboard")
+    NotificationManager:Notify("Dashboard", "Đã làm mới dữ liệu tổng quan.", "Hệ thống", 2)
+end)
+
+D_Quick:CreateButton("Khôi phục thông số mặc định", function()
+    State.WalkSpeed = 16
+    State.JumpPower = 50
+    State.FieldOfView = 70
+    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if hum then hum.WalkSpeed = 16; hum.JumpPower = 50 end
+    if Camera then Camera.FieldOfView = 70 end
+    HistoryManager:PushAction("Khôi phục thông số mặc định từ Dashboard")
+    NotificationManager:Notify("Thành công", "Đã khôi phục thông số mặc định.", "Thành công", 2.5)
+end)
+
+-- II. CHARACTER CENTER
+local C_Info = CharTab:CreateSection("Thông số & Trạng thái nhân vật")
+local LblCharName = C_Info:CreateLabel("Tên nhân vật: " .. LocalPlayer.Name)
+local LblUserId = C_Info:CreateLabel("User ID: " .. tostring(LocalPlayer.UserId))
+local LblPos = C_Info:CreateLabel("Tọa độ X, Y, Z: 0, 0, 0")
+local LblSpeed = C_Info:CreateLabel("Tốc độ di chuyển: 16")
+local LblJumpState = C_Info:CreateLabel("Trạng thái nhảy: Sẵn sàng")
+local LblCharState = C_Info:CreateLabel("Trạng thái nhân vật: Đang hoạt động")
+local LblHealth = C_Info:CreateLabel("Sức khỏe: 100 / 100")
+local LblRespawnTrack = C_Info:CreateLabel("Theo dõi hồi sinh: Số lần hồi sinh = 0")
+local LblHumState = C_Info:CreateLabel("Trạng thái Humanoid: Running")
+
+local C_Act = CharTab:CreateSection("Thao tác nhân vật")
+C_Act:CreateButton("Làm mới thông tin nhân vật", function()
+    HistoryManager:PushAction("Làm mới thông tin nhân vật")
+    NotificationManager:Notify("Nhân vật", "Đã cập nhật trạng thái nhân vật.", "Hệ thống", 2)
+end)
+
+C_Act:CreateButton("Sao chép tọa độ (X, Y, Z)", function()
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local s = string.format("%.1f, %.1f, %.1f", root.Position.X, root.Position.Y, root.Position.Z)
+    if setclipboard then pcall(setclipboard, s) end
+    HistoryManager:PushAction("Sao chép tọa độ: " .. s)
+    NotificationManager:Notify("Đã sao chép", "Tọa độ: " .. s, "Thành công", 2.5)
+end)
+
+C_Act:CreateButton("Sao chép thông tin nhân vật", function()
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local pStr = root and string.format("%.1f, %.1f, %.1f", root.Position.X, root.Position.Y, root.Position.Z) or "N/A"
+    local info = string.format("Name: %s | ID: %d | Pos: %s", LocalPlayer.Name, LocalPlayer.UserId, pStr)
+    if setclipboard then pcall(setclipboard, info) end
+    HistoryManager:PushAction("Sao chép thông tin nhân vật")
+    NotificationManager:Notify("Đã sao chép", "Đã sao chép thông tin nhân vật.", "Thành công", 2.5)
+end)
+
+-- III. ADVANCED VISUAL (Môi trường thử nghiệm được phép)
+local V_Main = VisTab:CreateSection("Thành phần hiển thị thử nghiệm")
+local function ClearVisuals()
+    for _, v in pairs(Registry.Visuals) do
+        if v.Highlight then pcall(function() v.Highlight:Destroy() end) end
+        if v.Billboard then pcall(function() v.Billboard:Destroy() end) end
+    end
+    table.clear(Registry.Visuals)
+end
+
+local function BuildVisualForPlayer(plr)
+    if plr == LocalPlayer or not State.Visual.Enabled then return end
+    if Registry.Visuals[plr] then
+        if Registry.Visuals[plr].Highlight then pcall(function() Registry.Visuals[plr].Highlight:Destroy() end) end
+        if Registry.Visuals[plr].Billboard then pcall(function() Registry.Visuals[plr].Billboard:Destroy() end) end
+    end
+    local char = plr.Character
+    local head = char and char:FindFirstChild("Head")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not head or not hum then return end
+
+    local entry = {}
+    if State.Visual.Highlight then
+        entry.Highlight = CreateInst("Highlight", {
+            FillColor = State.Visual.Color,
+            OutlineColor = Color3.new(1, 1, 1),
+            FillTransparency = State.Visual.Transparency,
+            Adornee = char
+        }, char)
+    end
+
+    local bb = CreateInst("BillboardGui", {
+        Size = UDim2.new(0, 190, 0, 58),
+        StudsOffset = Vector3.new(0, 2.8, 0),
+        AlwaysOnTop = true,
+        Adornee = head
+    }, head)
+
+    entry.Billboard = bb
+    entry.Label = CreateInst("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 36),
+        BackgroundTransparency = 1,
+        Font = Enum.Font.GothamBold,
+        TextColor3 = State.Visual.Color,
+        TextStrokeTransparency = 0.25,
+        TextSize = State.Visual.TextSize,
+        Text = plr.DisplayName
+    }, bb)
+
+    entry.HpBg = CreateInst("Frame", {
+        Size = UDim2.new(0.7, 0, 0, 5),
+        Position = UDim2.new(0.15, 0, 0, 40),
+        BackgroundColor3 = Color3.fromRGB(20, 22, 35),
+        BorderSizePixel = 0,
+        Visible = State.Visual.ShowHealth
+    }, bb)
+    CreateInst("UICorner", { CornerRadius = UDim.new(1, 0) }, entry.HpBg)
+
+    entry.HpFill = CreateInst("Frame", {
+        Size = UDim2.new(math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1), 0, 1, 0),
+        BackgroundColor3 = Color3.fromRGB(34, 197, 94),
+        BorderSizePixel = 0
+    }, entry.HpBg)
+    CreateInst("UICorner", { CornerRadius = UDim.new(1, 0) }, entry.HpFill)
+
+    Registry.Visuals[plr] = entry
+end
+
+local function SyncVisuals()
+    if not State.Visual.Enabled then
+        ClearVisuals()
+        return
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then BuildVisualForPlayer(p) end
+    end
+end
+
+V_Main:CreateToggle("Bật đánh dấu nhân vật", false, function(v)
+    State.Visual.Enabled = v
+    SyncVisuals()
+    HistoryManager:PushAction("Đánh dấu nhân vật: " .. (v and "Bật" or "Tắt"))
+end)
+V_Main:CreateToggle("Hiển thị tên người chơi", true, function(v) State.Visual.ShowName = v end)
+V_Main:CreateToggle("Hiển thị khoảng cách", true, function(v) State.Visual.ShowDistance = v end)
+V_Main:CreateToggle("Hiển thị thanh máu", true, function(v) State.Visual.ShowHealth = v; SyncVisuals() end)
+V_Main:CreateToggle("Hiển thị thông tin nhân vật", false, function(v) State.Visual.ShowCharInfo = v end)
+V_Main:CreateToggle("Tô sáng nhân vật", true, function(v) State.Visual.Highlight = v; SyncVisuals() end)
+
+local V_Style = VisTab:CreateSection("Tùy chỉnh màu sắc, độ trong suốt & kích thước chữ")
+V_Style:CreateDropdown("Màu sắc đánh dấu", { "Tím Neon", "Xanh Dương", "Xanh Ngọc", "Đỏ San Hô" }, function(opt)
+    local palette = {
+        ["Tím Neon"] = Color3.fromRGB(168, 85, 247),
+        ["Xanh Dương"] = Color3.fromRGB(59, 130, 246),
+        ["Xanh Ngọc"] = Color3.fromRGB(20, 184, 166),
+        ["Đỏ San Hô"] = Color3.fromRGB(244, 63, 94)
+    }
+    State.Visual.Color = palette[opt] or Color3.fromRGB(168, 85, 247)
+    SyncVisuals()
+end)
+V_Style:CreateSlider("Độ trong suốt", 0, 1, 0.5, function(v)
+    State.Visual.Transparency = v
+    SyncVisuals()
+end)
+V_Style:CreateSlider("Kích thước chữ", 9, 20, 12, function(v)
+    State.Visual.TextSize = v
+    SyncVisuals()
+end)
+
+-- IV. CAMERA STUDIO
+local Cam_Sec = CamTab:CreateSection("Điều khiển Camera trong giới hạn game")
+local SavedCamPreset = { Fov = 70, Zoom = 128, Mode = "Mặc định" }
+
+local CamFovSl = Cam_Sec:CreateSlider("Field Of View (FOV)", 40, 120, 70, function(v)
+    State.FieldOfView = v
+    if Camera then Camera.FieldOfView = v end
+end)
+local CamZoomSl = Cam_Sec:CreateSlider("Camera Zoom tối đa", 15, 500, 128, function(v)
+    State.CameraZoom = v
+    LocalPlayer.CameraMaxZoomDistance = v
+end)
+Cam_Sec:CreateSlider("Tốc độ camera", 0.2, 3.0, 1.0, function(v)
+    State.CameraSpeed = v
+end)
+Cam_Sec:CreateDropdown("Chuyển chế độ camera", { "Mặc định", "Góc nhìn thứ nhất", "Góc nhìn thứ ba", "Tùy chỉnh" }, function(mode)
+    State.CameraMode = mode
+    if mode == "Góc nhìn thứ nhất" then
+        LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+    else
+        LocalPlayer.CameraMode = Enum.CameraMode.Classic
+        if mode == "Góc nhìn thứ ba" then
+            LocalPlayer.CameraMinZoomDistance = 8
+        elseif mode == "Mặc định" then
+            LocalPlayer.CameraMinZoomDistance = 0.5
+        end
+    end
+    HistoryManager:PushAction("Đổi chế độ camera: " .. mode)
+end)
+
+Cam_Sec:CreateButton("Lưu cấu hình camera", function()
+    SavedCamPreset = { Fov = State.FieldOfView, Zoom = State.CameraZoom, Mode = State.CameraMode }
+    NotificationManager:Notify("Camera Studio", "Đã lưu cấu hình camera hiện tại.", "Thành công", 2.5)
+end)
+
+Cam_Sec:CreateButton("Khôi phục camera mặc định", function()
+    LocalPlayer.CameraMode = Enum.CameraMode.Classic
+    LocalPlayer.CameraMinZoomDistance = 0.5
+    CamFovSl:Set(70)
+    CamZoomSl:Set(128)
+    NotificationManager:Notify("Camera Studio", "Đã khôi phục camera mặc định.", "Thành công", 2.5)
+end)
+
+-- V. MOVEMENT PRO (Giới hạn trong môi trường người dùng có quyền kiểm soát)
+local M_Sec = MoveTab:CreateSection("Di chuyển nâng cao")
+local LblMoveCur = M_Sec:CreateLabel("Thông số hiện tại: Walk=16 | Sprint=32 | Jump=50 | FOV=70")
+
+local M_Walk = M_Sec:CreateSlider("Tốc độ đi bộ", 8, 200, 16, function(v)
+    State.WalkSpeed = v
+    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if hum and not State.SprintEnabled then hum.WalkSpeed = v end
+end)
+local M_SprintSpd = M_Sec:CreateSlider("Tốc độ chạy", 16, 240, 32, function(v)
+    State.SprintSpeed = v
+    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if hum and State.SprintEnabled then hum.WalkSpeed = v end
+end)
+local M_Jump = M_Sec:CreateSlider("Lực nhảy", 20, 260, 50, function(v)
+    State.JumpPower = v
+    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if hum then hum.UseJumpPower = true; hum.JumpPower = v end
+end)
+local M_Fov = M_Sec:CreateSlider("Góc nhìn (FOV)", 40, 120, 70, function(v)
+    State.FieldOfView = v
+    if Camera then Camera.FieldOfView = v end
+end)
+local M_SprintTg = M_Sec:CreateToggle("Chạy nhanh", false, function(v)
+    State.SprintEnabled = v
+    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if hum then hum.WalkSpeed = v and State.SprintSpeed or State.WalkSpeed end
+end)
+
+local SavedMoveCfg = { Walk = 16, SprintSpd = 32, Jump = 50, Fov = 70, Sprint = false }
+M_Sec:CreateButton("Lưu cấu hình di chuyển", function()
+    SavedMoveCfg = {
+        Walk = State.WalkSpeed,
+        SprintSpd = State.SprintSpeed,
+        Jump = State.JumpPower,
+        Fov = State.FieldOfView,
+        Sprint = State.SprintEnabled
+    }
+    NotificationManager:Notify("Movement Pro", "Đã lưu cấu hình di chuyển.", "Thành công", 2.5)
+end)
+
+M_Sec:CreateButton("Khôi phục thông số mặc định", function()
+    M_SprintTg:Set(false)
+    M_Walk:Set(16)
+    M_SprintSpd:Set(32)
+    M_Jump:Set(50)
+    M_Fov:Set(70)
+    NotificationManager:Notify("Movement Pro", "Đã đặt lại thông số mặc định.", "Thành công", 2.5)
+end)
+
+-- VI. WAYPOINT MANAGER (Khu vực thử nghiệm do người dùng quản lý)
+local W_Sec = WpTab:CreateSection("Quản lý điểm đánh dấu & Tọa độ")
+local WpNameInp = W_Sec:CreateInput("Tên điểm đánh dấu", "Ví dụ: Điểm thử nghiệm 1")
+local WpEditInp = W_Sec:CreateInput("Đổi tên điểm đang chọn", "Nhập tên mới...")
+local LblWpDist = W_Sec:CreateLabel("Khoảng cách tới điểm chọn: --")
+
+local function GetWpList()
+    local arr = {}
+    for k, _ in pairs(State.Waypoints) do table.insert(arr, k) end
+    table.sort(arr)
+    if #arr == 0 then table.insert(arr, "Chưa có điểm") end
+    return arr
+end
+
+local WpDrop = W_Sec:CreateDropdown("Danh sách điểm đã lưu", { "Chưa có điểm" }, function(opt)
+    if opt ~= "Chưa có điểm" then
+        State.SelectedWaypoint = opt
+    end
+end)
+
+W_Sec:CreateButton("Tạo & Lưu tọa độ hiện tại", function()
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not root then
+        NotificationManager:Notify("Lỗi", "Không tìm thấy nhân vật.", "Lỗi", 2.5)
+        return
+    end
+    local raw = WpNameInp:Get()
+    local name = (raw and raw:match("%S")) and raw or ("Điểm #" .. tostring(#State.Waypoints + 1))
+    State.Waypoints[name] = { root.Position.X, root.Position.Y, root.Position.Z }
+    State.SelectedWaypoint = name
+    WpDrop:Refresh(GetWpList(), name)
+    WpNameInp:Set("")
+    HistoryManager:PushAction("Lưu điểm đánh dấu: " .. name)
+    NotificationManager:Notify("Thành công", "Đã lưu điểm: " .. name, "Thành công", 2.5)
+end)
+
+W_Sec:CreateButton("Chỉnh sửa tên điểm đang chọn", function()
+    local oldName = State.SelectedWaypoint
+    local newName = WpEditInp:Get()
+    if oldName and State.Waypoints[oldName] and newName and newName:match("%S") then
+        State.Waypoints[newName] = State.Waypoints[oldName]
+        State.Waypoints[oldName] = nil
+        State.SelectedWaypoint = newName
+        WpDrop:Refresh(GetWpList(), newName)
+        WpEditInp:Set("")
+        NotificationManager:Notify("Cập nhật", "Đã đổi tên thành: " .. newName, "Thành công", 2.5)
+    else
+        NotificationManager:Notify("Cảnh báo", "Vui lòng chọn điểm và nhập tên mới.", "Cảnh báo", 2.5)
+    end
+end)
+
+W_Sec:CreateButton("Xóa điểm đang chọn", function()
+    local sel = State.SelectedWaypoint
+    if sel and State.Waypoints[sel] then
+        State.Waypoints[sel] = nil
+        State.SelectedWaypoint = nil
+        WpDrop:Refresh(GetWpList())
+        NotificationManager:Notify("Đã xóa", "Đã xóa điểm: " .. tostring(sel), "Hệ thống", 2.5)
+    end
+end)
+
+W_Sec:CreateButton("Sao chép tọa độ điểm chọn", function()
+    local sel = State.SelectedWaypoint
+    local p = sel and State.Waypoints[sel]
+    if p then
+        local txt = string.format("%.1f, %.1f, %.1f", p[1], p[2], p[3])
+        if setclipboard then pcall(setclipboard, txt) end
+        NotificationManager:Notify("Đã sao chép", txt, "Thành công", 2.5)
+    end
+end)
+
+local WpIoInp = W_Sec:CreateInput("JSON nhập/xuất điểm", "Dán JSON danh sách điểm...")
+W_Sec:CreateButton("Xuất danh sách điểm (JSON)", function()
+    local enc = HttpService:JSONEncode(State.Waypoints)
+    WpIoInp:Set(enc)
+    if setclipboard then pcall(setclipboard, enc) end
+    NotificationManager:Notify("Xuất dữ liệu", "Đã xuất JSON danh sách điểm.", "Thành công", 2.5)
+end)
+
+W_Sec:CreateButton("Nhập danh sách điểm từ JSON", function()
+    local raw = WpIoInp:Get()
+    local ok, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+    if ok and type(decoded) == "table" then
+        for k, v in pairs(decoded) do
+            if type(k) == "string" and type(v) == "table" and #v >= 3 then
+                State.Waypoints[k] = { tonumber(v[1]) or 0, tonumber(v[2]) or 0, tonumber(v[3]) or 0 }
+            end
+        end
+        WpDrop:Refresh(GetWpList())
+        NotificationManager:Notify("Nhập dữ liệu", "Đã nhập danh sách điểm thành công.", "Thành công", 2.5)
+    else
+        NotificationManager:Notify("Lỗi JSON", "Dữ liệu JSON không hợp lệ.", "Lỗi", 3)
+    end
+end)
+
+--// ========================================================================
+--// KEY SYSTEM (XÁC THỰC API THỰC TẾ)
+--// ========================================================================
+local KeyFrame = CreateInst("Frame", {
+    Name = "KeyVerificationFrame",
+    Size = UDim2.new(0, 440, 0, 340),
+    Position = UDim2.new(0.5, -220, 0.5, -170),
+    BackgroundColor3 = Color3.fromRGB(14, 16, 28),
+    BackgroundTransparency = 0.06,
+    ClipsDescendants = true,
+    ZIndex = 130
+}, RootGui)
+local KeyScale = CreateInst("UIScale", { Scale = GetAutoScale() }, KeyFrame)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 16) }, KeyFrame)
+CreateInst("UIStroke", { Color = Color3.fromRGB(147, 51, 234), Thickness = 1.8 }, KeyFrame)
+EnableDrag(KeyFrame, KeyFrame)
+
+CreateInst("TextLabel", {
+    Size = UDim2.new(1, -30, 0, 26),
+    Position = UDim2.new(0, 18, 0, 16),
+    BackgroundTransparency = 1,
+    Font = Enum.Font.GothamBlack,
+    Text = "ANDZ PREMIUM",
+    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 20,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, KeyFrame)
+
+CreateInst("TextLabel", {
+    Size = UDim2.new(1, -30, 0, 18),
+    Position = UDim2.new(0, 18, 0, 42),
+    BackgroundTransparency = 1,
+    Font = Enum.Font.GothamBold,
+    Text = "LICENSE VERIFICATION",
+    TextColor3 = Color3.fromRGB(96, 165, 250),
+    TextSize = 11,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, KeyFrame)
+
+local KeyLoadBar = CreateInst("Frame", {
+    Size = UDim2.new(1, -36, 0, 3),
+    Position = UDim2.new(0, 18, 0, 68),
+    BackgroundColor3 = Color3.fromRGB(32, 38, 62),
+    BorderSizePixel = 0
+}, KeyFrame)
+local KeyLoadSweep = CreateInst("Frame", {
+    Size = UDim2.new(0.25, 0, 1, 0),
+    BackgroundColor3 = Color3.fromRGB(168, 85, 247),
+    BorderSizePixel = 0
+}, KeyLoadBar)
+
+local verifyingNow = false
+task.spawn(function()
+    while KeyFrame and KeyFrame.Parent do
+        if verifyingNow then
+            Tween(KeyLoadSweep, { Position = UDim2.new(0.75, 0, 0, 0) }, 0.4, Enum.EasingStyle.Sine)
+            task.wait(0.42)
+            if not KeyFrame or not KeyFrame.Parent then break end
+            Tween(KeyLoadSweep, { Position = UDim2.new(0, 0, 0, 0) }, 0.4, Enum.EasingStyle.Sine)
+            task.wait(0.42)
+        else
+            KeyLoadSweep.Position = UDim2.new(0, 0, 0, 0)
+            task.wait(0.2)
+        end
+    end
+end)
+
+CreateInst("TextLabel", {
+    Size = UDim2.new(1, -36, 0, 18),
+    Position = UDim2.new(0, 18, 0, 80),
+    BackgroundTransparency = 1,
+    Font = Enum.Font.GothamSemibold,
+    Text = "Enter Your License Key",
+    TextColor3 = Color3.fromRGB(226, 232, 240),
+    TextSize = 12,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, KeyFrame)
+
+local KeyBoxFrame = CreateInst("Frame", {
+    Size = UDim2.new(1, -36, 0, 40),
+    Position = UDim2.new(0, 18, 0, 102),
+    BackgroundColor3 = Color3.fromRGB(22, 26, 44)
+}, KeyFrame)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 9) }, KeyBoxFrame)
+
+local KeyBox = CreateInst("TextBox", {
+    Size = UDim2.new(1, -20, 1, 0),
+    Position = UDim2.new(0, 10, 0, 0),
+    BackgroundTransparency = 1,
+    Font = Enum.Font.Code,
+    PlaceholderText = "Paste Your Key Here",
+    Text = "",
+    TextColor3 = Color3.new(1, 1, 1),
+    PlaceholderColor3 = Color3.fromRGB(120, 132, 162),
+    TextSize = 13,
+    ClearTextOnFocus = false,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, KeyBoxFrame)
+
+local LoginBtn = CreateInst("TextButton", {
+    Size = UDim2.new(1, -36, 0, 40),
+    Position = UDim2.new(0, 18, 0, 152),
+    BackgroundColor3 = Color3.fromRGB(147, 51, 234),
+    Font = Enum.Font.GothamBlack,
+    Text = "ĐĂNG NHẬP",
+    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 13
+}, KeyFrame)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 9) }, LoginBtn)
+
+local GetKeyBtn = CreateInst("TextButton", {
+    Size = UDim2.new(0.5, -22, 0, 34),
+    Position = UDim2.new(0, 18, 0, 202),
+    BackgroundColor3 = Color3.fromRGB(28, 34, 56),
+    Font = Enum.Font.GothamBold,
+    Text = "LẤY KEY",
+    TextColor3 = Color3.fromRGB(192, 132, 252),
+    TextSize = 11
+}, KeyFrame)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, GetKeyBtn)
+
+local CopyKeyBtn = CreateInst("TextButton", {
+    Size = UDim2.new(0.5, -22, 0, 34),
+    Position = UDim2.new(0.5, 4, 0, 202),
+    BackgroundColor3 = Color3.fromRGB(28, 34, 56),
+    Font = Enum.Font.GothamBold,
+    Text = "SAO CHÉP KEY",
+    TextColor3 = Color3.fromRGB(96, 165, 250),
+    TextSize = 11
+}, KeyFrame)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 8) }, CopyKeyBtn)
+
+local StatusPanel = CreateInst("Frame", {
+    Size = UDim2.new(1, -36, 0, 68),
+    Position = UDim2.new(0, 18, 0, 248),
+    BackgroundColor3 = Color3.fromRGB(18, 21, 36)
+}, KeyFrame)
+CreateInst("UICorner", { CornerRadius = UDim.new(0, 9) }, StatusPanel)
+
+local ServerStatusLbl = CreateInst("TextLabel", {
+    Size = UDim2.new(1, -16, 0, 24),
+    Position = UDim2.new(0, 10, 0, 6),
+    BackgroundTransparency = 1,
+    Font = Enum.Font.GothamBold,
+    Text = "Server Status: WAITING FOR VERIFICATION",
+    TextColor3 = Color3.fromRGB(148, 163, 184),
+    TextSize = 11,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, StatusPanel)
+
+local ExpireStatusLbl = CreateInst("TextLabel", {
+    Size = UDim2.new(1, -16, 0, 24),
+    Position = UDim2.new(0, 10, 0, 32),
+    BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium,
+    Text = "License Expiration: --",
+    TextColor3 = Color3.fromRGB(148, 163, 184),
+    TextSize = 11,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, StatusPanel)
+
+GetKeyBtn.MouseButton1Click:Connect(function()
+    if setclipboard then pcall(setclipboard, ANDZ_V3.GetKeyUrl) end
+    NotificationManager:Notify("Lấy Key", "Đã sao chép liên kết lấy key.", "Thành công", 3)
+end)
+
+CopyKeyBtn.MouseButton1Click:Connect(function()
+    local k = KeyBox.Text:gsub("%s+", "")
+    if k == "" then
+        NotificationManager:Notify("Thông báo", "Vui lòng nhập key!", "Cảnh báo", 2.5)
+        return
+    end
+    if setclipboard then pcall(setclipboard, k) end
+    NotificationManager:Notify("Đã sao chép", "Đã sao chép key.", "Thành công", 2.5)
+end)
+
+local function GetHwidSafe()
+    local ok, id = pcall(function()
+        if gethwid then return gethwid() end
+        return game:GetService("RbxAnalyticsService"):GetClientId()
+    end)
+    return (ok and id and tostring(id) ~= "") and tostring(id) or ("ANDZ_" .. tostring(LocalPlayer.UserId))
+end
+
+local function HttpGetJson(url)
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if req then
+        local ok, res = pcall(function()
+            return req({ Url = url, Method = "GET", Headers = { ["Accept"] = "application/json" } })
+        end)
+        if ok and res and res.Body then
+            local pOk, decoded = pcall(function() return HttpService:JSONDecode(res.Body) end)
+            if pOk and type(decoded) == "table" then return true, decoded end
+        end
+        return false, nil
+    end
+    local ok, body = pcall(function() return HttpService:GetAsync(url) end)
+    if ok and body then
+        local pOk, decoded = pcall(function() return HttpService:JSONDecode(body) end)
+        if pOk and type(decoded) == "table" then return true, decoded end
+    end
+    return false, nil
+end
+
+local function UnlockMainMenu(expStr)
+    State.Authenticated = true
+    State.LicenseStatus = "CONNECTED"
+    State.LicenseExpiry = tostring(expStr or "Active")
+    State.ApiLastStatus = "Đã kết nối"
+    LblLicense:SetText("Trạng thái License: Đã kích hoạt | Hạn: " .. State.LicenseExpiry)
+
+    Tween(KeyScale, { Scale = 0.05 }, 0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+    Tween(KeyFrame, { BackgroundTransparency = 1 }, 0.22)
+    task.wait(0.26)
+    if KeyFrame and KeyFrame.Parent then KeyFrame:Destroy() end
+
+    State.MenuOpen = true
+    MainFrame.Visible = true
+    MainScale.Scale = GetAutoScale() * 0.88
+    Tween(MainScale, { Scale = GetAutoScale() }, 0.28, Enum.EasingStyle.Back)
+    IslandManager:SyncSettings()
+    HistoryManager:PushAction("Đăng nhập thành công vào ANDZ PREMIUM V3")
+end
+
+local function AttemptLogin()
+    if verifyingNow then return end
+    local key = KeyBox.Text:gsub("^%s*(.-)%s*$", "%1")
+    if key == "" then
+        ServerStatusLbl.Text = "Server Status: WAITING FOR VERIFICATION"
+        ServerStatusLbl.TextColor3 = Color3.fromRGB(245, 158, 11)
+        NotificationManager:Notify("Xác thực", "Vui lòng nhập key!", "Cảnh báo", 3)
+        return
+    end
+
+    verifyingNow = true
+    ServerStatusLbl.Text = "Server Status: VERIFYING..."
+    ServerStatusLbl.TextColor3 = Color3.fromRGB(96, 165, 250)
+    NotificationManager:Notify("Xác thực", "Đang xác minh key...", "Hệ thống", 2.5)
+
+    task.spawn(function()
+        local url = string.format(
+            "%s?key=%s&hwid=%s&user_id=%s",
+            ANDZ_V3.ApiUrl,
+            HttpService:UrlEncode(key),
+            HttpService:UrlEncode(GetHwidSafe()),
+            tostring(LocalPlayer.UserId)
+        )
+        local ok, data = HttpGetJson(url)
+        verifyingNow = false
+
+        if not ok or not data then
+            ServerStatusLbl.Text = "Server Status: CONNECTION ERROR"
+            ServerStatusLbl.TextColor3 = Color3.fromRGB(239, 68, 68)
+            State.ApiLastStatus = "Lỗi kết nối"
+            NotificationManager:Notify("Lỗi mạng", "Không thể kết nối máy chủ!", "Lỗi", 3.5)
+            return
+        end
+
+        local st = tostring(data.status or data.state or ""):lower()
+        local msg = tostring(data.message or data.msg or ""):lower()
+        local valid = (data.success == true) or (data.valid == true) or st == "valid" or st == "success" or st == "active" or st == "ok"
+        local expired = (data.expired == true) or st == "expired" or (msg:find("expir") ~= nil) or (msg:find("hết hạn") ~= nil)
+        local expVal = data.expires_at or data.expiry or data.expire or data.time_left or "Không giới hạn"
+
+        if valid and not expired then
+            State.LicenseKey = key
+            ServerStatusLbl.Text = "Server Status: CONNECTED"
+            ServerStatusLbl.TextColor3 = Color3.fromRGB(34, 197, 94)
+            ExpireStatusLbl.Text = "License Expiration: " .. tostring(expVal)
+            ExpireStatusLbl.TextColor3 = Color3.fromRGB(74, 222, 128)
+            NotificationManager:Notify("Thành công", "Đăng nhập thành công!", "Thành công", 3)
+            task.wait(0.6)
+            UnlockMainMenu(expVal)
+        elseif expired then
+            ServerStatusLbl.Text = "Server Status: KEY EXPIRED"
+            ServerStatusLbl.TextColor3 = Color3.fromRGB(245, 158, 11)
+            ExpireStatusLbl.Text = "License Expiration: " .. tostring(expVal)
+            NotificationManager:Notify("Hết hạn", "Key đã hết hạn!", "Cảnh báo", 3.5)
+        else
+            ServerStatusLbl.Text = "Server Status: INVALID KEY"
+            ServerStatusLbl.TextColor3 = Color3.fromRGB(239, 68, 68)
+            NotificationManager:Notify("Thất bại", "Key không hợp lệ!", "Lỗi", 3.5)
+        end
+    end)
+end
+
+LoginBtn.MouseButton1Click:Connect(AttemptLogin)
+KeyBox.FocusLost:Connect(function(enter)
+    if enter then AttemptLogin() end
+end)
+
+--// ========================================================================
+--// TELEMETRY, RESPAWN & VISUAL LOOP (SHARED WITH PART 2)
+--// ========================================================================
+local RespawnCounter = 0
+local FpsSamples, PingSamples = {}, {}
+local LowestFps = 999
+
+TrackConn(LocalPlayer.CharacterAdded:Connect(function(char)
+    RespawnCounter += 1
+    HistoryManager:PushAction("Nhân vật hồi sinh lần #" .. tostring(RespawnCounter))
+    local hum = char:WaitForChild("Humanoid", 5)
+    if hum then
+        hum.WalkSpeed = State.SprintEnabled and State.SprintSpeed or State.WalkSpeed
+        hum.UseJumpPower = true
+        hum.JumpPower = State.JumpPower
+    end
+end))
+
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then
+        TrackConn(p.CharacterAdded:Connect(function()
+            task.wait(0.25)
+            if State.Visual.Enabled then BuildVisualForPlayer(p) end
+        end))
+    end
+end
+TrackConn(Players.PlayerAdded:Connect(function(p)
+    TrackConn(p.CharacterAdded:Connect(function()
+        task.wait(0.25)
+        if State.Visual.Enabled then BuildVisualForPlayer(p) end
+    end))
+end))
+TrackConn(Players.PlayerRemoving:Connect(function(p)
+    if Registry.Visuals[p] then
+        if Registry.Visuals[p].Highlight then pcall(function() Registry.Visuals[p].Highlight:Destroy() end) end
+        if Registry.Visuals[p].Billboard then pcall(function() Registry.Visuals[p].Billboard:Destroy() end) end
+        Registry.Visuals[p] = nil
+    end
+end))
+
+local framesAcc = 0
+local lastTick = os.clock()
+
+local PerfUiCallbacks = {}
+
+TrackConn(RunService.RenderStepped:Connect(function()
+    framesAcc += 1
+    local now = os.clock()
+    if (now - lastTick) >= 0.5 then
+        local fps = math.floor(framesAcc / (now - lastTick) + 0.5)
+        framesAcc = 0
+        lastTick = now
+
+        local ping = 0
+        pcall(function()
+            ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue() + 0.5)
+        end)
+
+        if fps > 0 and fps < LowestFps then LowestFps = fps end
+        table.insert(FpsSamples, fps)
+        table.insert(PingSamples, ping)
+        if #FpsSamples > 40 then table.remove(FpsSamples, 1) end
+        if #PingSamples > 40 then table.remove(PingSamples, 1) end
+
+        local sumF, sumP = 0, 0
+        for _, v in ipairs(FpsSamples) do sumF += v end
+        for _, v in ipairs(PingSamples) do sumP += v end
+        local avgF = #FpsSamples > 0 and math.floor(sumF / #FpsSamples + 0.5) or fps
+        local avgP = #PingSamples > 0 and math.floor(sumP / #PingSamples + 0.5) or ping
+
+        local elapsed = math.floor(now - State.SessionStart)
+        local hh = math.floor(elapsed / 3600)
+        local mm = math.floor((elapsed % 3600) / 60)
+        local ss = elapsed % 60
+        local upStr = string.format("%02d:%02d:%02d", hh, mm, ss)
+
+        IslandManager:UpdateTelemetry(fps, ping)
+
+        if State.Authenticated and State.Automation.AutoUpdateDashboard then
+            LblFps:SetText("FPS trực tiếp: " .. tostring(fps) .. " FPS")
+            LblPing:SetText("Ping trực tiếp: " .. tostring(ping) .. " ms")
+            LblUptime:SetText("Thời gian hoạt động: " .. upStr)
+            if State.Automation.AutoUpdateClock then
+                LblClock:SetText("Đồng hồ thời gian thực: " .. os.date("%H:%M:%S"))
+            end
+            local bars = math.clamp(math.floor(fps / 6), 1, 10)
+            LblPerfChart:SetText("Biểu đồ hiệu suất: [" .. string.rep("■", bars) .. string.rep("·", 10 - bars) .. "]")
+            LblServer:SetText("Máy chủ: PlaceId " .. tostring(game.PlaceId) .. " | Người chơi: " .. #Players:GetPlayers())
+            LblActiveCount:SetText("Chức năng đang bật: " .. tostring(CountActiveFeatures()))
+            LblActiveCfg:SetText("Cấu hình hiện tại: " .. State.ActiveProfile .. " | Theme: " .. State.Theme.Name)
+            LblRecentAct:SetText("Thao tác gần đây: " .. (State.ActionHistory[1] or "Chưa có"))
+            LblActHist:SetText("Lịch sử hoạt động: " .. tostring(#State.ActivityLog) .. " bản ghi")
+        end
+
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+        if root then
+            LblPos:SetText(string.format("Tọa độ X, Y, Z: %.1f, %.1f, %.1f", root.Position.X, root.Position.Y, root.Position.Z))
+        end
+        if hum then
+            LblSpeed:SetText("Tốc độ di chuyển: " .. tostring(math.floor(hum.WalkSpeed * 10) / 10))
+            LblJumpState:SetText("Trạng thái nhảy: " .. (hum.Jump and "Đang nhảy" or "Sẵn sàng"))
+            LblCharState:SetText("Trạng thái nhân vật: " .. (hum.Health > 0 and "Sống" or "Gục"))
+            LblHealth:SetText(string.format("Sức khỏe: %d / %d", math.floor(hum.Health), math.floor(hum.MaxHealth)))
+            LblHumState:SetText("Trạng thái Humanoid: " .. hum:GetState().Name)
+        end
+        LblRespawnTrack:SetText("Theo dõi hồi sinh: Số lần hồi sinh = " .. tostring(RespawnCounter))
+        LblMoveCur:SetText(string.format("Thông số hiện tại: Walk=%d | Sprint=%d | Jump=%d | FOV=%d", State.WalkSpeed, State.SprintSpeed, State.JumpPower, State.FieldOfView))
+
+        if State.SelectedWaypoint and State.Waypoints[State.SelectedWaypoint] and root then
+            local wp = State.Waypoints[State.SelectedWaypoint]
+            local d = math.floor((root.Position - Vector3.new(wp[1], wp[2], wp[3])).Magnitude)
+            LblWpDist:SetText("Khoảng cách tới điểm chọn: " .. tostring(d) .. " studs (" .. tostring(State.SelectedWaypoint) .. ")")
+        else
+            LblWpDist:SetText("Khoảng cách tới điểm chọn: --")
+        end
+
+        if State.Visual.Enabled and root then
+            for plr, vis in pairs(Registry.Visuals) do
+                local pChar = plr.Character
+                local pRoot = pChar and pChar:FindFirstChild("HumanoidRootPart")
+                local pHum = pChar and pChar:FindFirstChildOfClass("Humanoid")
+                if pRoot and pHum and vis.Label then
+                    local parts = {}
+                    if State.Visual.ShowName then table.insert(parts, plr.DisplayName) end
+                    if State.Visual.ShowDistance then
+                        table.insert(parts, "[" .. math.floor((root.Position - pRoot.Position).Magnitude) .. "m]")
+                    end
+                    if State.Visual.ShowCharInfo then
+                        table.insert(parts, "(" .. math.floor(pHum.Health) .. "HP)")
+                    end
+                    vis.Label.Text = table.concat(parts, " ")
+                    if vis.HpBg then vis.HpBg.Visible = State.Visual.ShowHealth end
+                    if vis.HpFill then
+                        vis.HpFill.Size = UDim2.new(math.clamp(pHum.Health / math.max(pHum.MaxHealth, 1), 0, 1), 0, 1, 0)
+                    end
+                end
+            end
+        end
+
+        for _, cb in ipairs(PerfUiCallbacks) do
+            pcall(cb, fps, ping, avgF, LowestFps == 999 and fps or LowestFps, avgP, upStr)
+        end
+    end
+end))
+
+-- Xuất API nội bộ để Part 2 nối tiếp trực tiếp vào cùng hệ thống
+_G.ANDZ_V3_BRIDGE = {
+    Config = ANDZ_V3,
+    State = State,
+    Registry = Registry,
+    ThemeManager = ThemeManager,
+    NotificationManager = NotificationManager,
+    HistoryManager = HistoryManager,
+    IslandManager = IslandManager,
+    CreateTab = CreateTab,
+    SelectTabByName = SelectTabByName,
+    RegisterCommand = RegisterCommand,
+    CommandRegistry = CommandRegistry,
+    NotifRefreshCallbacks = NotifRefreshCallbacks,
+    PerfUiCallbacks = PerfUiCallbacks,
+    ColorToHex = ColorToHex,
+    HexToColor = HexToColor,
+    CountActiveFeatures = CountActiveFeatures,
+    MainScale = MainScale
+}
